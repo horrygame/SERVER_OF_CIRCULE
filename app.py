@@ -1,9 +1,8 @@
-from flask import Flask, render_template
+from flask import Flask, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
 import random
 import time
 import threading
-from datetime import datetime, timedelta
 import math
 
 app = Flask(__name__)
@@ -18,7 +17,6 @@ GAME_DURATION = 150  # 2.5 минуты
 # Хранилище данных
 rooms = {}
 players = {}
-games = {}
 
 class GameRoom:
     def __init__(self, room_id):
@@ -26,7 +24,7 @@ class GameRoom:
         self.players = []
         self.bots = []
         self.status = 'waiting'  # waiting, counting, playing, finished
-        self.start_time = None
+        self.start_time = time.time()
         self.waiting_timer = None
         self.game_timer = None
         self.game_state = {
@@ -57,11 +55,11 @@ class GameRoom:
         self.broadcast_room_update()
         
         # Запускаем таймер, если это первый игрок
-        if len(self.players) == 1:
+        if len(self.players) == 1 and self.status == 'waiting':
             self.start_waiting_timer()
         
         # Если комната заполнена, начинаем игру
-        if len(self.players) >= MAX_PLAYERS_PER_ROOM:
+        if len(self.players) >= MAX_PLAYERS_PER_ROOM and self.status == 'counting':
             self.start_game()
             
         return True
@@ -76,20 +74,12 @@ class GameRoom:
             
             # Если игроков не осталось, удаляем комнату
             if len(self.players) == 0 and len(self.bots) == 0:
-                if self.waiting_timer:
+                if self.waiting_timer and self.status == 'counting':
                     self.waiting_timer.cancel()
-                if self.game_timer:
-                    self.game_timer.cancel()
                 if self.room_id in rooms:
                     del rooms[self.room_id]
-                if self.room_id in games:
-                    del games[self.room_id]
             else:
                 self.broadcast_room_update()
-                
-                # Если игра идет, продолжаем
-                if self.status == 'playing':
-                    self.broadcast_game_state()
 
     def add_bot(self):
         if len(self.game_state['players']) >= MAX_PLAYERS_PER_ROOM:
@@ -121,10 +111,13 @@ class GameRoom:
             time_left = WAITING_TIME
             while time_left > 0 and self.status == 'counting':
                 time.sleep(1)
-                time_left -= 1
+                time_left = WAITING_TIME - (time.time() - self.start_time)
                 
+                if time_left <= 0:
+                    break
+                    
                 # Отправляем обновление всем игрокам в комнате
-                self.broadcast_room_update(time_left)
+                self.broadcast_room_update(int(time_left))
                 
                 # Если комната заполнилась, прерываем ожидание
                 if len(self.players) >= MAX_PLAYERS_PER_ROOM:
@@ -151,6 +144,7 @@ class GameRoom:
         # Обновляем начальное состояние игры
         self.game_state['game_time'] = GAME_DURATION
         self.game_state['status'] = 'playing'
+        self.game_start_time = time.time()
         
         # Уведомляем всех игроков о начале игры
         socketio.emit('game_start', self.game_state, room=self.room_id)
@@ -168,7 +162,7 @@ class GameRoom:
                 last_update = current_time
                 
                 # Обновляем время игры
-                self.game_state['game_time'] -= delta_time
+                self.game_state['game_time'] = max(0, GAME_DURATION - (current_time - self.game_start_time))
                 
                 # Обновляем позиции ботов
                 self.update_bots(delta_time)
@@ -220,7 +214,6 @@ class GameRoom:
 
     def check_collisions(self):
         # В этой версии просто добавляем случайные очки за "сбор предметов"
-        # В реальной игре здесь была бы логика столкновений с объектами
         for player_id, player in self.game_state['players'].items():
             # Случайное увеличение счета (имитация сбора предметов)
             if random.random() < 0.01:  # 1% шанс каждое обновление
@@ -231,30 +224,23 @@ class GameRoom:
         self.game_state['status'] = 'finished'
         
         # Определяем победителя
-        winner = max(self.game_state['players'].values(), key=lambda x: x['score'])
-        
-        # Отправляем результаты игры
-        results = {
-            'winner': winner['name'],
-            'winner_score': winner['score'],
-            'players': self.game_state['players']
-        }
-        
-        socketio.emit('game_over', results, room=self.room_id)
+        if self.game_state['players']:
+            winner = max(self.game_state['players'].values(), key=lambda x: x['score'])
+            
+            # Отправляем результаты игры
+            results = {
+                'winner': winner['name'],
+                'winner_score': winner['score'],
+                'players': self.game_state['players']
+            }
+            
+            socketio.emit('game_over', results, room=self.room_id)
         
         # Через 5 секунд очищаем комнату
         def cleanup():
             time.sleep(5)
-            for player_id in self.players.copy():
-                if player_id in players:
-                    # Отключаем игрока
-                    socketio.emit('redirect_to_menu', room=player_id)
-            
-            # Очищаем данные
             if self.room_id in rooms:
                 del rooms[self.room_id]
-            if self.room_id in games:
-                del games[self.room_id]
         
         threading.Thread(target=cleanup).start()
 
@@ -267,6 +253,11 @@ class GameRoom:
             'max_players': MAX_PLAYERS_PER_ROOM,
             'time_left': int(time_left)
         }
+        
+        # Добавляем сообщение о ботах, если время вышло
+        if time_left <= 0 and len(self.players) < MAX_PLAYERS_PER_ROOM:
+            bots_needed = MAX_PLAYERS_PER_ROOM - len(self.players)
+            room_info['message'] = f'Добавляем {bots_needed} ботов...'
         
         socketio.emit('room_update', room_info, room=self.room_id)
 
@@ -297,7 +288,6 @@ def get_available_room():
     room_id = f"room_{len(rooms) + 1}"
     new_room = GameRoom(room_id)
     rooms[room_id] = new_room
-    games[room_id] = new_room.game_state
     
     return new_room
 
@@ -362,7 +352,7 @@ def index():
         'status': 'Server is running',
         'active_rooms': len(rooms),
         'active_players': len(players),
-        'timestamp': datetime.now().isoformat()
+        'timestamp': time.time()
     }
 
 @app.route('/stats')
