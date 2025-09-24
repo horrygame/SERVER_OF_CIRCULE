@@ -1,0 +1,12 @@
+{
+  "name": "game-frontend",
+  "version": "1.0.0",
+  "description": "Static frontend for the game",
+  "scripts": {
+    "build": "echo 'No build process needed'",
+    "start": "echo 'Static site - no server needed'"
+  },
+  "keywords": ["game", "static"],
+  "author": "Your Name",
+  "license": "MIT"
+}
