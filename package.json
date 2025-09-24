@@ -4,7 +4,7 @@
   "description": "Static frontend for the game",
   "scripts": {
     "build": "echo 'No build process needed'",
-    "start": "echo 'Web service - server needed''"
+    "start": "run app.py'"
   },
   "keywords": ["game", "static"],
   "author": "Your Name",
