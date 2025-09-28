@@ -2,8 +2,8 @@ import socket
 import json
 import threading
 from threading import Thread
-
-HOST, PORT = 'localhost', 8080
+PORT = int(os.environ.get("PORT", 8080))
+HOST, PORT = "0.0.0.0", PORT
 MAX_PLAYERS = 100
 
 
