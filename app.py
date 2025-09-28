@@ -11,7 +11,7 @@ class GameServer:
         
         # Важно: Render предоставляет порт через переменную окружения
         self.HOST = '0.0.0.0'  # Слушаем все интерфейсы
-        self.PORT = int(os.environ.get('PORT', 8080))
+
         
         self.players = {}
         self.bullets = []
